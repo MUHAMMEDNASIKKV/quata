@@ -5,7 +5,10 @@
 
 // Configuration
 // IMPORTANT: Replace with your actual Google Apps Script Web App URL
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwyTtKzqbiOQ3XYXP1nux_bn51O5mr-p_96pGko8e0kjHiKvJAAe6nzwjbzT_YKsGC3/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyuEj2pySImGcHQvlcmW4tHxoUgZR7vU2uQEhxpUaT3EvenqARuO7wsxoFqweIqjC5b/exec";
+
+// CSV URL for student data (name, mode)
+const CSV_STUDENTS_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQoxIRr-axYhnWISr0bVPaTIhZK-aoBv3KZQZCdCJDlrCtgbFfw0F29IyxV6pyMIQRjb9UmRIPrOZRw/pub?gid=0&single=true&output=csv";
 
 // Slot limits based on year
 const SLOT_RULES = {
@@ -35,14 +38,15 @@ const PG_SECOND_YEAR = [16074, 16075, 16077, 16078, 16082, 16110, 16122, 16128, 
 const PG_FIRST_YEAR = [16620, 16622, 16628, 16635, 16648, 16649, 16651, 16663, 16666, 16668, 16678, 16683, 16691, 16696, 16701, 16709, 16715, 16739, 16751, 16770, 16784, 16798, 16807, 16821, 16823, 16835, 16846, 16855, 16875, 16889, 16960, 17028, 17047, 17106, 17195];
 
 // Global state
-let studentsData = [];        // array of objects { enrol, name, year, status }
-let currentStudent = null;    // selected student object after enrolment lookup
-let selectedWeek = null;       // week chosen by user
-let isLoading = false;
+let studentsDataFromCSV = [];     // student data from CSV { enrol, name, mode }
+let registrationsData = [];        // registration data from sheet { enrol, name, year, status }
+let currentStudent = null;         // selected student object
+let selectedWeek = null;           // week chosen by user
 
 // DOM Elements
 const enrolInput = document.getElementById('enrolNo');
 const studentNameField = document.getElementById('studentName');
+const modeField = document.getElementById('modeField');
 const yearField = document.getElementById('yearField');
 const weekContainer = document.getElementById('weekContainer');
 const weekSlotInfo = document.getElementById('weekSlotInfo');
@@ -56,13 +60,13 @@ const statusDisplay = document.getElementById('statusDisplay');
 // 🚀 INITIALIZATION
 // ============================================
 document.addEventListener('DOMContentLoaded', async () => {
-    await refreshStudentData();
+    await loadCSVData();
+    await loadRegistrationsData();
     setupEventListeners();
     resetStudentUI();
 });
 
 function setupEventListeners() {
-    // Debounced enrolment lookup
     let debounceTimeout;
     enrolInput.addEventListener('input', (e) => {
         clearTimeout(debounceTimeout);
@@ -80,45 +84,92 @@ function setupEventListeners() {
 }
 
 // ============================================
-// 📥 DATA LOADING FROM GOOGLE SHEETS
+// 📥 DATA LOADING
 // ============================================
 
-async function fetchStudentsFromSheet() {
+// Load student data from CSV (name, mode)
+async function loadCSVData() {
     try {
-        const response = await fetch(`${APPS_SCRIPT_URL}?action=getAllStudents&t=${Date.now()}`);
-        const data = await response.json();
+        const response = await fetch(CSV_STUDENTS_URL);
+        const csvText = await response.text();
+        const rows = csvText.split(/\r?\n/).filter(row => row.trim().length > 0);
         
-        if (data.error) {
-            console.error("Error loading students:", data.error);
-            return [];
+        if (rows.length < 2) return;
+        
+        const headers = rows[0].split(',').map(h => h.replace(/["']/g, '').trim().toLowerCase());
+        const enrolIdx = headers.findIndex(h => h.includes('enrol') || h === 'enrl no');
+        const nameIdx = headers.findIndex(h => h === 'name');
+        const modeIdx = headers.findIndex(h => h === 'mode');
+        
+        studentsDataFromCSV = [];
+        
+        for (let i = 1; i < rows.length; i++) {
+            const values = parseCSVRow(rows[i]);
+            const enrolNo = values[enrolIdx] ? values[enrolIdx].trim() : '';
+            const name = values[nameIdx] ? values[nameIdx].trim() : '';
+            const mode = values[modeIdx] ? values[modeIdx].trim() : '';
+            
+            if (enrolNo && name) {
+                studentsDataFromCSV.push({
+                    enrol: String(enrolNo).trim(),
+                    name: name,
+                    mode: mode || 'Not Specified'
+                });
+            }
         }
         
-        if (Array.isArray(data)) {
-            return data;
-        } else if (data.data && Array.isArray(data.data)) {
-            return data.data;
-        }
-        return [];
+        console.log(`Loaded ${studentsDataFromCSV.length} students from CSV`);
     } catch (err) {
-        console.error("Fetch error:", err);
-        return [];
+        console.error("CSV fetch error:", err);
+        showAlert("Failed to load student data. Please refresh.", true);
     }
 }
 
-async function refreshStudentData() {
+// Load registrations from Google Sheet
+async function loadRegistrationsData() {
     try {
-        const data = await fetchStudentsFromSheet();
-        if (data.length) {
-            studentsData = data.map(s => ({
-                enrol: String(s.enrol || s["enrol no"] || s["enrl no"] || "").trim(),
-                name: s.name || "",
-                year: s.year || "",
-                status: s.status || ""
-            }));
+        const response = await fetch(`${APPS_SCRIPT_URL}?action=getAllRegistrations&t=${Date.now()}`);
+        const data = await response.json();
+        
+        if (data.error) {
+            console.error("Error loading registrations:", data.error);
+            registrationsData = [];
+            return;
         }
-    } catch(e) { 
-        console.error(e); 
+        
+        if (Array.isArray(data)) {
+            registrationsData = data;
+        } else if (data.data && Array.isArray(data.data)) {
+            registrationsData = data.data;
+        } else {
+            registrationsData = [];
+        }
+        
+        console.log(`Loaded ${registrationsData.length} registrations from sheet`);
+    } catch (err) {
+        console.error("Fetch error:", err);
+        registrationsData = [];
     }
+}
+
+// Helper: parse CSV row
+function parseCSVRow(rowStr) {
+    const result = [];
+    let inQuote = false;
+    let current = '';
+    for (let i = 0; i < rowStr.length; i++) {
+        const ch = rowStr[i];
+        if (ch === '"') {
+            inQuote = !inQuote;
+        } else if (ch === ',' && !inQuote) {
+            result.push(current.trim());
+            current = '';
+        } else {
+            current += ch;
+        }
+    }
+    result.push(current.trim());
+    return result;
 }
 
 // ============================================
@@ -141,12 +192,13 @@ async function lookupStudent(enrol) {
         return false;
     }
     
-    // Refresh data from sheet
-    await refreshStudentData();
+    // Refresh registrations data
+    await loadRegistrationsData();
     
-    // Determine year from enrolment number
-    const year = getYearFromEnrol(enrol);
-    if (!year) {
+    // Find student in CSV data
+    const csvStudent = studentsDataFromCSV.find(s => s.enrol === String(enrol).trim());
+    
+    if (!csvStudent) {
         enrolError.textContent = "❌ Enrolment number not found in registry";
         enrolError.classList.remove("hidden");
         resetStudentUI();
@@ -158,17 +210,28 @@ async function lookupStudent(enrol) {
     
     enrolError.classList.add("hidden");
     
-    // Find if student already has a status in the sheet
-    const existingStudent = studentsData.find(s => String(s.enrol).trim() === String(enrol).trim());
+    // Determine year
+    const year = getYearFromEnrol(enrol);
+    if (!year) {
+        enrolError.textContent = "❌ Enrolment number not recognized for year classification";
+        enrolError.classList.remove("hidden");
+        resetStudentUI();
+        return false;
+    }
+    
+    // Find if student already has a registration
+    const existingRegistration = registrationsData.find(r => String(r.enrol).trim() === String(enrol).trim());
     
     currentStudent = {
         enrol: String(enrol).trim(),
-        name: existingStudent?.name || "Student Name Not Found",
+        name: csvStudent.name,
+        mode: csvStudent.mode,
         year: year,
-        status: existingStudent?.status || ""
+        status: existingRegistration?.status || ""
     };
     
     studentNameField.value = currentStudent.name;
+    modeField.value = currentStudent.mode;
     yearField.value = currentStudent.year;
     
     // Show status if already registered
@@ -196,6 +259,7 @@ async function lookupStudent(enrol) {
 
 function resetStudentUI() {
     studentNameField.value = '';
+    modeField.value = '';
     yearField.value = '';
     currentStudent = null;
     selectedWeek = null;
@@ -217,11 +281,11 @@ function getSlotUsage() {
         "PG First Year": { "week-1": 0, "week-2": 0, "week-3": 0 }
     };
     
-    studentsData.forEach(student => {
-        if (student.status && student.status !== "" && student.year) {
-            const week = student.status;
-            if (usage[student.year] && usage[student.year][week] !== undefined) {
-                usage[student.year][week]++;
+    registrationsData.forEach(registration => {
+        if (registration.status && registration.status !== "" && registration.year) {
+            const week = registration.status;
+            if (usage[registration.year] && usage[registration.year][week] !== undefined) {
+                usage[registration.year][week]++;
             }
         }
     });
@@ -342,7 +406,7 @@ window.selectWeek = function(week) {
 };
 
 // ============================================
-// 📤 SUBMIT REGISTRATION
+// 📤 SUBMIT REGISTRATION TO GOOGLE SHEET
 // ============================================
 
 async function submitRegistration() {
@@ -371,7 +435,7 @@ async function submitRegistration() {
     // Show loading state
     const originalBtnHtml = submitBtn.innerHTML;
     submitBtn.disabled = true;
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
+    submitBtn.innerHTML = '<div class="loading-spinner"></div> Submitting...';
     
     try {
         const response = await fetch(APPS_SCRIPT_URL, {
@@ -385,24 +449,29 @@ async function submitRegistration() {
                 enrolNo: currentStudent.enrol,
                 status: selectedWeek,
                 year: currentStudent.year,
-                name: currentStudent.name
+                name: currentStudent.name,
+                mode: currentStudent.mode
             })
         });
         
         const result = await response.json();
         
         if (result.success) {
-            // Update local data
+            // Update local registration data
             currentStudent.status = selectedWeek;
-            const index = studentsData.findIndex(s => s.enrol === currentStudent.enrol);
-            if (index !== -1) {
-                studentsData[index].status = selectedWeek;
+            
+            // Add to registrationsData array
+            const existingIndex = registrationsData.findIndex(r => r.enrol === currentStudent.enrol);
+            if (existingIndex !== -1) {
+                registrationsData[existingIndex].status = selectedWeek;
             } else {
-                studentsData.push({
+                registrationsData.push({
                     enrol: currentStudent.enrol,
                     name: currentStudent.name,
                     year: currentStudent.year,
-                    status: selectedWeek
+                    mode: currentStudent.mode,
+                    status: selectedWeek,
+                    submission_date: new Date().toISOString()
                 });
             }
             
@@ -418,7 +487,7 @@ async function submitRegistration() {
             
         } else {
             showAlert(`❌ Registration failed: ${result.error || "Unknown error"}`);
-            await refreshStudentData();
+            await loadRegistrationsData();
             renderWeekCards(currentStudent.year);
         }
         
