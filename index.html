@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>PG Quota Registration Portal</title>
+    <title>PG Quota Registration Portal | Fast</title>
     <!-- Tailwind + Font Awesome + Google Fonts -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * { font-family: 'Inter', sans-serif; }
         body { background: #f8fafc; }
@@ -33,14 +33,14 @@
         }
         .input-field:read-only {
             background-color: #f3f4f6;
-            cursor: not-allowed;
+            cursor: default;
         }
         .week-card {
             border: 2px solid #e9ecef;
             border-radius: 24px;
             padding: 1.2rem;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.15s ease;
             background: #ffffff;
             text-align: center;
         }
@@ -85,12 +85,12 @@
             font-size: 0.9rem;
             white-space: nowrap;
         }
+        @media (max-width: 640px) {
+            .alert-popup { white-space: normal; width: 90%; text-align: center; font-size: 0.85rem; }
+        }
         .alert-popup.show {
             opacity: 1;
             transform: translateX(-50%) translateY(0);
-        }
-        @media (max-width: 640px) {
-            .alert-popup { white-space: normal; width: 90%; text-align: center; font-size: 0.85rem; }
         }
         .status-badge {
             display: inline-block;
@@ -103,28 +103,38 @@
             background: #d1fae5;
             color: #065f46;
         }
-        .status-not-submitted {
-            background: #fee2e2;
-            color: #991b1b;
-        }
         .loading-spinner {
             display: inline-block;
-            width: 20px;
-            height: 20px;
+            width: 18px;
+            height: 18px;
             border: 2px solid #f3f3f3;
             border-top: 2px solid #0f3b2c;
             border-radius: 50%;
-            animation: spin 1s linear infinite;
+            animation: spin 0.8s linear infinite;
         }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        .skeleton-card {
+            background: linear-gradient(110deg, #ececec 8%, #f5f5f5 18%, #ececec 33%);
+            background-size: 200% 100%;
+            animation: shimmer 1.2s linear infinite;
+            border-radius: 24px;
+            height: 110px;
+        }
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        .instant-fade {
+            transition: opacity 0.08s ease;
+        }
+        button:active { transform: scale(0.98); }
     </style>
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
 
-    <!-- MAIN PORTAL CARD -->
     <div class="max-w-3xl w-full card-modern p-5 md:p-8 transition-all">
         <div class="text-center mb-6">
             <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800">PG QUOTA</h1>
@@ -132,61 +142,51 @@
             <div class="h-1 w-20 bg-emerald-700 mx-auto rounded-full mt-3"></div>
         </div>
 
-        <!-- Student Info Form -->
         <div class="space-y-5">
-            <!-- Enrol No -->
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-1"><i class="fas fa-id-card mr-2 text-emerald-700"></i>Enrolment Number</label>
                 <input type="text" id="enrolNo" class="input-field" placeholder="Enter your enrolment number" autocomplete="off">
                 <p id="enrolError" class="text-xs text-red-500 mt-1 hidden"></p>
             </div>
 
-            <!-- Name (auto from CSV) -->
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-1"><i class="fas fa-user mr-2 text-emerald-700"></i>Full Name</label>
                 <input type="text" id="studentName" class="input-field" readonly placeholder="Will appear automatically">
             </div>
 
-            <!-- Mode (auto from CSV) -->
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-1"><i class="fas fa-graduation-cap mr-2 text-emerald-700"></i>Mode of Study</label>
                 <input type="text" id="modeField" class="input-field" readonly placeholder="Course / Thesis">
             </div>
 
-            <!-- Year (auto from enrolment number) -->
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-1"><i class="fas fa-calendar-alt mr-2 text-emerald-700"></i>Year</label>
                 <input type="text" id="yearField" class="input-field" readonly placeholder="PG First Year / PG Second Year">
             </div>
 
-            <!-- Status (auto - shows if already registered) -->
             <div id="statusContainer" class="hidden">
                 <label class="block text-sm font-semibold text-gray-700 mb-1"><i class="fas fa-info-circle mr-2 text-emerald-700"></i>Registration Status</label>
                 <div id="statusDisplay" class="input-field"></div>
             </div>
 
-            <!-- Week Selection (3 boxes) -->
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-2"><i class="fas fa-calendar-week mr-2 text-emerald-700"></i>Select Your Preferred Week</label>
                 <div id="weekContainer" class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
-                    <!-- Dynamic week cards injected -->
+                    <div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div>
                 </div>
                 <div id="weekSlotInfo" class="text-xs text-gray-500 mt-2 flex justify-between flex-wrap gap-2"></div>
             </div>
 
-            <!-- Submit Button -->
             <button id="submitBtn" class="w-full bg-emerald-800 hover:bg-emerald-900 text-white font-bold py-3 rounded-2xl transition-all shadow-md flex items-center justify-center gap-2 text-lg mt-4">
                 <i class="fas fa-check-circle"></i> Confirm Registration
             </button>
         </div>
 
-        <!-- Footer note -->
         <div class="mt-8 text-center text-xs text-gray-400 border-t pt-5">
             <i class="fas fa-clock mr-1"></i> Slots are allocated on first-come-first-serve basis.
         </div>
     </div>
 
-    <!-- global alert popup -->
     <div id="alertPopup" class="alert-popup">⚠️ Message</div>
 
     <script src="app.js"></script>
