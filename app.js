@@ -1,6 +1,6 @@
 // ============================================
 // PG WORKSHOP REGISTRATION PORTAL
-// Frontend JavaScript (app.js)
+// Frontend JavaScript (app.js) - Optimized Fast Loading
 // ============================================
 
 // Configuration
@@ -38,10 +38,11 @@ const PG_SECOND_YEAR = [16074, 16075, 16077, 16078, 16082, 16110, 16122, 16128, 
 const PG_FIRST_YEAR = [16620, 16622, 16628, 16635, 16648, 16649, 16651, 16663, 16666, 16668, 16678, 16683, 16691, 16696, 16701, 16709, 16715, 16739, 16751, 16770, 16784, 16798, 16807, 16821, 16823, 16835, 16846, 16855, 16875, 16889, 16960, 17028, 17047, 17106, 17195];
 
 // Global state
-let studentsDataFromCSV = [];     // student data from CSV { enrol, name, mode }
-let registrationsData = [];        // registration data from sheet { enrol, name, year, status }
-let currentStudent = null;         // selected student object
-let selectedWeek = null;           // week chosen by user
+let studentsDataFromCSV = new Map();  // Fast lookup: enrol -> { name, mode }
+let registrationsData = [];            // registration data from sheet
+let currentStudent = null;            // selected student object
+let selectedWeek = null;              // week chosen by user
+let csvLoaded = false;                // flag for CSV load status
 
 // DOM Elements
 const enrolInput = document.getElementById('enrolNo');
@@ -57,13 +58,27 @@ const statusContainer = document.getElementById('statusContainer');
 const statusDisplay = document.getElementById('statusDisplay');
 
 // ============================================
-// 🚀 INITIALIZATION
+// 🚀 OPTIMIZED INITIALIZATION (Parallel Loading)
 // ============================================
 document.addEventListener('DOMContentLoaded', async () => {
-    await loadCSVData();
-    await loadRegistrationsData();
+    // Show loading indicator while fetching
+    enrolInput.placeholder = "Loading data...";
+    enrolInput.disabled = true;
+    
+    // Load CSV and registrations in PARALLEL for maximum speed
+    await Promise.all([
+        loadCSVDataFast(),
+        loadRegistrationsData()
+    ]);
+    
+    // Enable input after data loads
+    enrolInput.disabled = false;
+    enrolInput.placeholder = "Enter your enrolment number";
+    
     setupEventListeners();
     resetStudentUI();
+    
+    console.log('✅ Portal ready - CSV and registrations loaded');
 });
 
 function setupEventListeners() {
@@ -73,59 +88,93 @@ function setupEventListeners() {
         const val = e.target.value.trim();
         debounceTimeout = setTimeout(() => {
             if (val.length > 0) {
-                lookupStudent(val);
+                lookupStudentFast(val);
             } else {
                 resetStudentUI();
             }
-        }, 400);
+        }, 200); // Reduced from 400ms for faster response
     });
     
     submitBtn.addEventListener('click', submitRegistration);
 }
 
 // ============================================
-// 📥 DATA LOADING
+// 📥 FAST CSV LOADING (Optimized)
 // ============================================
 
-// Load student data from CSV (name, mode)
-async function loadCSVData() {
+async function loadCSVDataFast() {
     try {
         const response = await fetch(CSV_STUDENTS_URL);
         const csvText = await response.text();
-        const rows = csvText.split(/\r?\n/).filter(row => row.trim().length > 0);
         
-        if (rows.length < 2) return;
+        // Parse CSV efficiently
+        const lines = csvText.split(/\r?\n/);
+        if (lines.length < 2) return;
         
-        const headers = rows[0].split(',').map(h => h.replace(/["']/g, '').trim().toLowerCase());
+        // Parse header row
+        const headers = lines[0].split(',').map(h => h.replace(/["']/g, '').trim().toLowerCase());
         const enrolIdx = headers.findIndex(h => h.includes('enrol') || h === 'enrl no');
         const nameIdx = headers.findIndex(h => h === 'name');
         const modeIdx = headers.findIndex(h => h === 'mode');
         
-        studentsDataFromCSV = [];
+        // Clear and use Map for O(1) lookups
+        studentsDataFromCSV.clear();
         
-        for (let i = 1; i < rows.length; i++) {
-            const values = parseCSVRow(rows[i]);
-            const enrolNo = values[enrolIdx] ? values[enrolIdx].trim() : '';
-            const name = values[nameIdx] ? values[nameIdx].trim() : '';
-            const mode = values[modeIdx] ? values[modeIdx].trim() : '';
+        // Fast parsing loop - skip empty lines
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            
+            const values = fastCSVParse(line);
+            
+            const enrolNo = values[enrolIdx]?.trim() || '';
+            const name = values[nameIdx]?.trim() || '';
+            const mode = values[modeIdx]?.trim() || '';
             
             if (enrolNo && name) {
-                studentsDataFromCSV.push({
-                    enrol: String(enrolNo).trim(),
+                studentsDataFromCSV.set(String(enrolNo).trim(), {
                     name: name,
                     mode: mode || 'Not Specified'
                 });
             }
         }
         
-        console.log(`Loaded ${studentsDataFromCSV.length} students from CSV`);
+        csvLoaded = true;
+        console.log(`⚡ Fast-loaded ${studentsDataFromCSV.size} students from CSV (Map storage)`);
+        
     } catch (err) {
         console.error("CSV fetch error:", err);
         showAlert("Failed to load student data. Please refresh.", true);
+        csvLoaded = false;
     }
 }
 
-// Load registrations from Google Sheet
+// Optimized CSV row parsing (faster than regex)
+function fastCSVParse(line) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    
+    for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        
+        if (char === '"') {
+            inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+            result.push(current.trim());
+            current = '';
+        } else {
+            current += char;
+        }
+    }
+    result.push(current.trim());
+    return result;
+}
+
+// ============================================
+// 📥 LOAD REGISTRATIONS (With Cache Buster)
+// ============================================
+
 async function loadRegistrationsData() {
     try {
         const response = await fetch(`${APPS_SCRIPT_URL}?action=getAllRegistrations&t=${Date.now()}`);
@@ -145,35 +194,15 @@ async function loadRegistrationsData() {
             registrationsData = [];
         }
         
-        console.log(`Loaded ${registrationsData.length} registrations from sheet`);
+        console.log(`📋 Loaded ${registrationsData.length} registrations`);
     } catch (err) {
         console.error("Fetch error:", err);
         registrationsData = [];
     }
 }
 
-// Helper: parse CSV row
-function parseCSVRow(rowStr) {
-    const result = [];
-    let inQuote = false;
-    let current = '';
-    for (let i = 0; i < rowStr.length; i++) {
-        const ch = rowStr[i];
-        if (ch === '"') {
-            inQuote = !inQuote;
-        } else if (ch === ',' && !inQuote) {
-            result.push(current.trim());
-            current = '';
-        } else {
-            current += ch;
-        }
-    }
-    result.push(current.trim());
-    return result;
-}
-
 // ============================================
-// 🔍 STUDENT LOOKUP & YEAR DETECTION
+// 🔍 FAST STUDENT LOOKUP & YEAR DETECTION
 // ============================================
 
 function getYearFromEnrol(enrol) {
@@ -186,17 +215,16 @@ function getYearFromEnrol(enrol) {
     return null;
 }
 
-async function lookupStudent(enrol) {
+async function lookupStudentFast(enrol) {
     if (!enrol || enrol.trim() === "") {
         resetStudentUI();
         return false;
     }
     
-    // Refresh registrations data
-    await loadRegistrationsData();
+    const cleanEnrol = String(enrol).trim();
     
-    // Find student in CSV data
-    const csvStudent = studentsDataFromCSV.find(s => s.enrol === String(enrol).trim());
+    // Fast O(1) lookup from Map
+    const csvStudent = studentsDataFromCSV.get(cleanEnrol);
     
     if (!csvStudent) {
         enrolError.textContent = "❌ Enrolment number not found in registry";
@@ -219,17 +247,23 @@ async function lookupStudent(enrol) {
         return false;
     }
     
-    // Find if student already has a registration
-    const existingRegistration = registrationsData.find(r => String(r.enrol).trim() === String(enrol).trim());
+    // Refresh registrations data to ensure up-to-date slot info
+    await loadRegistrationsData();
+    
+    // Find existing registration (case-insensitive comparison)
+    const existingRegistration = registrationsData.find(r => 
+        String(r.enrol).trim().toLowerCase() === cleanEnrol.toLowerCase()
+    );
     
     currentStudent = {
-        enrol: String(enrol).trim(),
+        enrol: cleanEnrol,
         name: csvStudent.name,
         mode: csvStudent.mode,
         year: year,
         status: existingRegistration?.status || ""
     };
     
+    // Fast UI updates
     studentNameField.value = currentStudent.name;
     modeField.value = currentStudent.mode;
     yearField.value = currentStudent.year;
@@ -457,10 +491,10 @@ async function submitRegistration() {
         const result = await response.json();
         
         if (result.success) {
-            // Update local registration data
+            // Update local state
             currentStudent.status = selectedWeek;
             
-            // Add to registrationsData array
+            // Update registrationsData
             const existingIndex = registrationsData.findIndex(r => r.enrol === currentStudent.enrol);
             if (existingIndex !== -1) {
                 registrationsData[existingIndex].status = selectedWeek;
@@ -477,7 +511,7 @@ async function submitRegistration() {
             
             showAlert(`✅ Success! You have registered for ${WEEK_DISPLAY_NAMES[selectedWeek]}.`, false);
             
-            // Update UI to show status
+            // Update UI
             statusContainer.classList.remove("hidden");
             statusDisplay.innerHTML = `<span class="status-badge status-submitted"><i class="fas fa-check-circle mr-1"></i> Registered for ${WEEK_DISPLAY_NAMES[selectedWeek]}</span>`;
             renderWeekCards(currentStudent.year);
@@ -533,4 +567,4 @@ document.addEventListener("keydown", function(e) {
     }
 });
 
-console.log('%c🌙 PG Workshop Registration Portal Loaded 🌙', 'color: #059669; font-size: 16px; font-weight: bold;');
+console.log('%c⚡ PG Workshop Registration Portal - Fast Load Edition ⚡', 'color: #059669; font-size: 16px; font-weight: bold;');
