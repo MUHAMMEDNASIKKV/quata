@@ -1,27 +1,16 @@
 // ============================================
 // PG WORKSHOP REGISTRATION PORTAL
-// Frontend JavaScript (app.js) - Optimized Fast Loading
+// Frontend JavaScript (app.js) – ULTRA FAST EDITION
 // ============================================
 
 // Configuration
-// IMPORTANT: Replace with your actual Google Apps Script Web App URL
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyuEj2pySImGcHQvlcmW4tHxoUgZR7vU2uQEhxpUaT3EvenqARuO7wsxoFqweIqjC5b/exec";
-
-// CSV URL for student data (name, mode)
 const CSV_STUDENTS_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQoxIRr-axYhnWISr0bVPaTIhZK-aoBv3KZQZCdCJDlrCtgbFfw0F29IyxV6pyMIQRjb9UmRIPrOZRw/pub?gid=0&single=true&output=csv";
 
-// Slot limits based on year
+// Slot rules
 const SLOT_RULES = {
-    "PG Second Year": {
-        "week-1": 14,
-        "week-2": 15,
-        "week-3": 15
-    },
-    "PG First Year": {
-        "week-1": 11,
-        "week-2": 12,
-        "week-3": 12
-    }
+    "PG Second Year": { "week-1": 14, "week-2": 15, "week-3": 15 },
+    "PG First Year":  { "week-1": 11, "week-2": 12, "week-3": 12 }
 };
 
 const WEEKS = ["week-1", "week-2", "week-3"];
@@ -31,20 +20,25 @@ const WEEK_DISPLAY_NAMES = {
     "week-3": "Week 3"
 };
 
-// PG Second Year students list
+// Year classification lists (hardcoded for speed)
 const PG_SECOND_YEAR = [16074, 16075, 16077, 16078, 16082, 16110, 16122, 16128, 16138, 16146, 16148, 16150, 16156, 16158, 16160, 16172, 16176, 16178, 16179, 16185, 16187, 16194, 16207, 16215, 16219, 16222, 16227, 16232, 16234, 16245, 16248, 16262, 16271, 16273, 16274, 16279, 16297, 16300, 16308, 16334, 16382, 16383, 16552, 16612];
-
-// PG First Year students list
 const PG_FIRST_YEAR = [16620, 16622, 16628, 16635, 16648, 16649, 16651, 16663, 16666, 16668, 16678, 16683, 16691, 16696, 16701, 16709, 16715, 16739, 16751, 16770, 16784, 16798, 16807, 16821, 16823, 16835, 16846, 16855, 16875, 16889, 16960, 17028, 17047, 17106, 17195];
 
-// Global state
-let studentsDataFromCSV = new Map();  // Fast lookup: enrol -> { name, mode }
-let registrationsData = [];            // registration data from sheet
-let currentStudent = null;            // selected student object
-let selectedWeek = null;              // week chosen by user
-let csvLoaded = false;                // flag for CSV load status
+// ============================================
+// GLOBAL STATE (Optimized for speed)
+// ============================================
+let studentsMap = new Map();               // enrol -> { name, mode }
+let registrations = [];                    // raw registration objects
+let slotUsageCache = {                     // precomputed slot usage
+    "PG Second Year": { "week-1": 0, "week-2": 0, "week-3": 0 },
+    "PG First Year":  { "week-1": 0, "week-2": 0, "week-3": 0 }
+};
+let currentStudent = null;
+let selectedWeek = null;
+let dataReady = false;                     // both CSV and registrations loaded
+let pendingEnrol = null;                   // if user typed before data ready
 
-// DOM Elements
+// DOM elements
 const enrolInput = document.getElementById('enrolNo');
 const studentNameField = document.getElementById('studentName');
 const modeField = document.getElementById('modeField');
@@ -58,113 +52,93 @@ const statusContainer = document.getElementById('statusContainer');
 const statusDisplay = document.getElementById('statusDisplay');
 
 // ============================================
-// 🚀 OPTIMIZED INITIALIZATION (Parallel Loading)
+// 🚀 INIT – PARALLEL LOAD, INPUT ENABLED IMMEDIATELY
 // ============================================
-document.addEventListener('DOMContentLoaded', async () => {
-    // Show loading indicator while fetching
-    enrolInput.placeholder = "Loading data...";
-    enrolInput.disabled = true;
-    
-    // Load CSV and registrations in PARALLEL for maximum speed
-    await Promise.all([
-        loadCSVDataFast(),
-        loadRegistrationsData()
-    ]);
-    
-    // Enable input after data loads
+(async function init() {
+    // Enable input right away – no "Loading..." placeholder
     enrolInput.disabled = false;
     enrolInput.placeholder = "Enter your enrolment number";
     
-    setupEventListeners();
-    resetStudentUI();
+    // Start both fetches in parallel
+    const csvPromise = loadCSVData();
+    const regPromise = loadRegistrations();
     
-    console.log('✅ Portal ready - CSV and registrations loaded');
-});
-
-function setupEventListeners() {
-    let debounceTimeout;
-    enrolInput.addEventListener('input', (e) => {
-        clearTimeout(debounceTimeout);
-        const val = e.target.value.trim();
-        debounceTimeout = setTimeout(() => {
-            if (val.length > 0) {
-                lookupStudentFast(val);
-            } else {
-                resetStudentUI();
-            }
-        }, 200); // Reduced from 400ms for faster response
-    });
+    await Promise.all([csvPromise, regPromise]);
     
-    submitBtn.addEventListener('click', submitRegistration);
-}
+    // Data is ready
+    dataReady = true;
+    computeSlotUsage();            // build cache from registrations
+    
+    // If user already typed something, process it now
+    if (pendingEnrol) {
+        lookupStudent(pendingEnrol);
+        pendingEnrol = null;
+    }
+    
+    // Start background refresh (every 30s) to keep slots accurate
+    setInterval(async () => {
+        await loadRegistrations();
+        computeSlotUsage();
+        // If a student is currently viewing, refresh week cards to show latest slots
+        if (currentStudent && currentStudent.year) {
+            renderWeekCards(currentStudent.year);
+        }
+    }, 30000);
+    
+    console.log('⚡ Portal ready – all data cached');
+})();
 
 // ============================================
-// 📥 FAST CSV LOADING (Optimized)
+// 📥 FAST CSV LOAD (parses directly into Map)
 // ============================================
-
-async function loadCSVDataFast() {
+async function loadCSVData() {
     try {
         const response = await fetch(CSV_STUDENTS_URL);
-        const csvText = await response.text();
-        
-        // Parse CSV efficiently
-        const lines = csvText.split(/\r?\n/);
+        const text = await response.text();
+        const lines = text.split(/\r?\n/);
         if (lines.length < 2) return;
         
-        // Parse header row
+        // Detect headers
         const headers = lines[0].split(',').map(h => h.replace(/["']/g, '').trim().toLowerCase());
         const enrolIdx = headers.findIndex(h => h.includes('enrol') || h === 'enrl no');
         const nameIdx = headers.findIndex(h => h === 'name');
         const modeIdx = headers.findIndex(h => h === 'mode');
         
-        // Clear and use Map for O(1) lookups
-        studentsDataFromCSV.clear();
+        studentsMap.clear();
         
-        // Fast parsing loop - skip empty lines
+        // Fast manual parsing (no regex)
         for (let i = 1; i < lines.length; i++) {
             const line = lines[i].trim();
             if (!line) continue;
-            
-            const values = fastCSVParse(line);
-            
-            const enrolNo = values[enrolIdx]?.trim() || '';
+            const values = fastCSVRow(line);
+            const enrol = values[enrolIdx]?.trim() || '';
             const name = values[nameIdx]?.trim() || '';
             const mode = values[modeIdx]?.trim() || '';
-            
-            if (enrolNo && name) {
-                studentsDataFromCSV.set(String(enrolNo).trim(), {
-                    name: name,
-                    mode: mode || 'Not Specified'
-                });
+            if (enrol && name) {
+                studentsMap.set(enrol, { name, mode: mode || 'Not Specified' });
             }
         }
-        
-        csvLoaded = true;
-        console.log(`⚡ Fast-loaded ${studentsDataFromCSV.size} students from CSV (Map storage)`);
-        
-    } catch (err) {
-        console.error("CSV fetch error:", err);
-        showAlert("Failed to load student data. Please refresh.", true);
-        csvLoaded = false;
+        console.log(`📋 ${studentsMap.size} students loaded`);
+    } catch (e) {
+        console.error("CSV load error:", e);
+        showAlert("Could not load student list. Refresh the page.", true);
     }
 }
 
-// Optimized CSV row parsing (faster than regex)
-function fastCSVParse(line) {
+// Ultra‑fast CSV row split (handles quoted commas)
+function fastCSVRow(line) {
     const result = [];
     let current = '';
     let inQuotes = false;
-    
     for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        
-        if (char === '"') {
+        const ch = line[i];
+        if (ch === '"') {
             inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
+        } else if (ch === ',' && !inQuotes) {
             result.push(current.trim());
             current = '';
         } else {
-            current += char;
+            current += ch;
         }
     }
     result.push(current.trim());
@@ -172,126 +146,124 @@ function fastCSVParse(line) {
 }
 
 // ============================================
-// 📥 LOAD REGISTRATIONS (With Cache Buster)
+// 📋 LOAD REGISTRATIONS (cached, no UI block)
 // ============================================
-
-async function loadRegistrationsData() {
+async function loadRegistrations() {
     try {
-        const response = await fetch(`${APPS_SCRIPT_URL}?action=getAllRegistrations&t=${Date.now()}`);
-        const data = await response.json();
-        
-        if (data.error) {
-            console.error("Error loading registrations:", data.error);
-            registrationsData = [];
-            return;
-        }
-        
+        const resp = await fetch(`${APPS_SCRIPT_URL}?action=getAllRegistrations&t=${Date.now()}`);
+        const data = await resp.json();
         if (Array.isArray(data)) {
-            registrationsData = data;
+            registrations = data;
         } else if (data.data && Array.isArray(data.data)) {
-            registrationsData = data.data;
+            registrations = data.data;
         } else {
-            registrationsData = [];
+            registrations = [];
         }
-        
-        console.log(`📋 Loaded ${registrationsData.length} registrations`);
-    } catch (err) {
-        console.error("Fetch error:", err);
-        registrationsData = [];
+    } catch (e) {
+        console.warn("Registrations fetch failed, using last known data");
+        // Keep existing registrations
+    }
+}
+
+// Compute slot usage cache from registrations array
+function computeSlotUsage() {
+    // Reset cache
+    slotUsageCache = {
+        "PG Second Year": { "week-1": 0, "week-2": 0, "week-3": 0 },
+        "PG First Year":  { "week-1": 0, "week-2": 0, "week-3": 0 }
+    };
+    for (const reg of registrations) {
+        const year = reg.year;
+        const week = reg.status;
+        if (year && week && slotUsageCache[year] && slotUsageCache[year][week] !== undefined) {
+            slotUsageCache[year][week]++;
+        }
     }
 }
 
 // ============================================
-// 🔍 FAST STUDENT LOOKUP & YEAR DETECTION
+// ⚡ LIGHTNING‑FAST LOOKUP (no awaits, pure sync)
 // ============================================
-
 function getYearFromEnrol(enrol) {
-    const enrolNum = parseInt(enrol);
-    if (PG_SECOND_YEAR.includes(enrolNum)) {
-        return "PG Second Year";
-    } else if (PG_FIRST_YEAR.includes(enrolNum)) {
-        return "PG First Year";
-    }
+    const num = parseInt(enrol);
+    if (PG_SECOND_YEAR.includes(num)) return "PG Second Year";
+    if (PG_FIRST_YEAR.includes(num)) return "PG First Year";
     return null;
 }
 
-async function lookupStudentFast(enrol) {
-    if (!enrol || enrol.trim() === "") {
-        resetStudentUI();
-        return false;
+function lookupStudent(enrol) {
+    const clean = String(enrol).trim();
+    if (!clean) {
+        resetUI();
+        return;
     }
     
-    const cleanEnrol = String(enrol).trim();
+    // If data isn't ready yet, store for later
+    if (!dataReady) {
+        pendingEnrol = clean;
+        enrolInput.placeholder = "Loading data...";
+        return;
+    }
     
-    // Fast O(1) lookup from Map
-    const csvStudent = studentsDataFromCSV.get(cleanEnrol);
-    
-    if (!csvStudent) {
-        enrolError.textContent = "❌ Enrolment number not found in registry";
+    const student = studentsMap.get(clean);
+    if (!student) {
+        enrolError.textContent = "❌ Enrolment number not found";
         enrolError.classList.remove("hidden");
-        resetStudentUI();
-        currentStudent = null;
-        selectedWeek = null;
-        renderWeekCards(null);
-        return false;
+        resetUI();
+        return;
+    }
+    
+    const year = getYearFromEnrol(clean);
+    if (!year) {
+        enrolError.textContent = "❌ Enrolment number not recognized";
+        enrolError.classList.remove("hidden");
+        resetUI();
+        return;
     }
     
     enrolError.classList.add("hidden");
     
-    // Determine year
-    const year = getYearFromEnrol(enrol);
-    if (!year) {
-        enrolError.textContent = "❌ Enrolment number not recognized for year classification";
-        enrolError.classList.remove("hidden");
-        resetStudentUI();
-        return false;
-    }
-    
-    // Refresh registrations data to ensure up-to-date slot info
-    await loadRegistrationsData();
-    
-    // Find existing registration (case-insensitive comparison)
-    const existingRegistration = registrationsData.find(r => 
-        String(r.enrol).trim().toLowerCase() === cleanEnrol.toLowerCase()
+    // Check existing registration (case‑insensitive)
+    const existing = registrations.find(r => 
+        String(r.enrol).trim().toLowerCase() === clean.toLowerCase()
     );
     
     currentStudent = {
-        enrol: cleanEnrol,
-        name: csvStudent.name,
-        mode: csvStudent.mode,
+        enrol: clean,
+        name: student.name,
+        mode: student.mode,
         year: year,
-        status: existingRegistration?.status || ""
+        status: existing?.status || ""
     };
     
-    // Fast UI updates
+    // Populate fields instantly
     studentNameField.value = currentStudent.name;
     modeField.value = currentStudent.mode;
     yearField.value = currentStudent.year;
     
-    // Show status if already registered
-    if (currentStudent.status && currentStudent.status !== "") {
+    // Show registration status if any
+    if (currentStudent.status) {
         statusContainer.classList.remove("hidden");
-        const statusText = WEEK_DISPLAY_NAMES[currentStudent.status] || currentStudent.status;
-        statusDisplay.innerHTML = `<span class="status-badge status-submitted"><i class="fas fa-check-circle mr-1"></i> Registered for ${statusText}</span>`;
-        selectedWeek = null;
+        const weekName = WEEK_DISPLAY_NAMES[currentStudent.status] || currentStudent.status;
+        statusDisplay.innerHTML = `<span class="status-badge status-submitted"><i class="fas fa-check-circle mr-1"></i> Registered for ${weekName}</span>`;
         submitBtn.disabled = true;
         submitBtn.style.opacity = "0.6";
         submitBtn.style.cursor = "not-allowed";
-        showAlert(`ℹ️ You have already registered for ${statusText}. Registration cannot be changed.`, false);
+        selectedWeek = null;
+        showAlert(`ℹ️ You have already registered for ${weekName}.`, false);
     } else {
         statusContainer.classList.add("hidden");
         statusDisplay.innerHTML = "";
-        selectedWeek = null;
         submitBtn.disabled = false;
         submitBtn.style.opacity = "1";
         submitBtn.style.cursor = "pointer";
+        selectedWeek = null;
     }
     
     renderWeekCards(currentStudent.year);
-    return true;
 }
 
-function resetStudentUI() {
+function resetUI() {
     studentNameField.value = '';
     modeField.value = '';
     yearField.value = '';
@@ -299,46 +271,25 @@ function resetStudentUI() {
     selectedWeek = null;
     statusContainer.classList.add("hidden");
     statusDisplay.innerHTML = "";
-    renderWeekCards(null);
     submitBtn.disabled = false;
     submitBtn.style.opacity = "1";
     submitBtn.style.cursor = "pointer";
+    renderWeekCards(null);
 }
 
 // ============================================
-// 🎨 RENDER WEEK CARDS & SLOT MANAGEMENT
+// 🎴 WEEK CARDS – RENDER FROM CACHE (instant)
 // ============================================
-
-function getSlotUsage() {
-    const usage = {
-        "PG Second Year": { "week-1": 0, "week-2": 0, "week-3": 0 },
-        "PG First Year": { "week-1": 0, "week-2": 0, "week-3": 0 }
-    };
-    
-    registrationsData.forEach(registration => {
-        if (registration.status && registration.status !== "" && registration.year) {
-            const week = registration.status;
-            if (usage[registration.year] && usage[registration.year][week] !== undefined) {
-                usage[registration.year][week]++;
-            }
-        }
-    });
-    
-    return usage;
-}
-
 function isSlotAvailable(week, year) {
-    const usage = getSlotUsage();
+    const used = slotUsageCache[year]?.[week] || 0;
     const limit = SLOT_RULES[year]?.[week] || 0;
-    const current = usage[year]?.[week] || 0;
-    return current < limit;
+    return used < limit;
 }
 
 function getRemainingSlots(week, year) {
-    const usage = getSlotUsage();
+    const used = slotUsageCache[year]?.[week] || 0;
     const limit = SLOT_RULES[year]?.[week] || 0;
-    const current = usage[year]?.[week] || 0;
-    return Math.max(0, limit - current);
+    return Math.max(0, limit - used);
 }
 
 function renderWeekCards(year) {
@@ -353,32 +304,21 @@ function renderWeekCards(year) {
         return;
     }
     
-    const usage = getSlotUsage();
-    let cardsHtml = '';
-    
-    WEEKS.forEach(week => {
-        const limit = SLOT_RULES[year]?.[week] || 0;
-        const current = usage[year]?.[week] || 0;
-        const available = current < limit;
-        const remaining = limit - current;
+    let html = '';
+    for (const week of WEEKS) {
+        const limit = SLOT_RULES[year][week] || 0;
+        const used = slotUsageCache[year]?.[week] || 0;
+        const available = used < limit;
+        const remaining = limit - used;
         const isSelected = (selectedWeek === week);
-        const isAlreadyRegistered = currentStudent?.status && currentStudent.status !== "";
+        const disabled = !available || (currentStudent?.status && currentStudent.status !== "");
         
-        let disabledClass = '';
-        let clickHandler = '';
+        const baseClass = 'week-card' + (disabled ? ' disabled' : ' cursor-pointer hover:shadow-md transition-all');
+        const selectedClass = isSelected ? ' selected' : '';
+        const clickAttr = disabled ? '' : `onclick="selectWeek('${week}')"`;
         
-        if (!available || isAlreadyRegistered) {
-            disabledClass = 'week-card disabled';
-            clickHandler = '';
-        } else {
-            disabledClass = 'week-card cursor-pointer hover:shadow-md transition-all';
-            clickHandler = `onclick="selectWeek('${week}')"`;
-        }
-        
-        const selectedClass = isSelected ? 'selected' : '';
-        
-        cardsHtml += `
-            <div class="${disabledClass} ${selectedClass}" ${clickHandler} data-week="${week}">
+        html += `
+            <div class="${baseClass}${selectedClass}" ${clickAttr} data-week="${week}">
                 <div class="flex flex-col items-center">
                     <h3 class="font-bold text-gray-800 text-lg mb-2">${WEEK_DISPLAY_NAMES[week]}</h3>
                     <div class="slot-badge ${!available ? 'slot-full' : 'bg-emerald-100 text-emerald-700'}">
@@ -390,94 +330,82 @@ function renderWeekCards(year) {
                 </div>
             </div>
         `;
-    });
+    }
+    weekContainer.innerHTML = html;
     
-    weekContainer.innerHTML = cardsHtml;
-    
-    // Update slot info summary
-    const secondYearW1Remaining = getRemainingSlots("week-1", "PG Second Year");
-    const secondYearW2Remaining = getRemainingSlots("week-2", "PG Second Year");
-    const secondYearW3Remaining = getRemainingSlots("week-3", "PG Second Year");
-    const firstYearW1Remaining = getRemainingSlots("week-1", "PG First Year");
-    const firstYearW2Remaining = getRemainingSlots("week-2", "PG First Year");
-    const firstYearW3Remaining = getRemainingSlots("week-3", "PG First Year");
+    // Summary info
+    const syW1 = getRemainingSlots("week-1", "PG Second Year");
+    const syW2 = getRemainingSlots("week-2", "PG Second Year");
+    const syW3 = getRemainingSlots("week-3", "PG Second Year");
+    const fyW1 = getRemainingSlots("week-1", "PG First Year");
+    const fyW2 = getRemainingSlots("week-2", "PG First Year");
+    const fyW3 = getRemainingSlots("week-3", "PG First Year");
     
     weekSlotInfo.innerHTML = `
         <div class="flex flex-wrap gap-3 justify-between w-full">
             <span class="bg-gray-100 px-3 py-1.5 rounded-full text-xs font-medium">
                 <i class="fas fa-calendar-week text-emerald-600 mr-1"></i> PG Second Year: 
-                W1(${secondYearW1Remaining}) | W2(${secondYearW2Remaining}) | W3(${secondYearW3Remaining})
+                W1(${syW1}) | W2(${syW2}) | W3(${syW3})
             </span>
             <span class="bg-gray-100 px-3 py-1.5 rounded-full text-xs font-medium">
                 <i class="fas fa-calendar-week text-emerald-600 mr-1"></i> PG First Year: 
-                W1(${firstYearW1Remaining}) | W2(${firstYearW2Remaining}) | W3(${firstYearW3Remaining})
+                W1(${fyW1}) | W2(${fyW2}) | W3(${fyW3})
             </span>
         </div>
     `;
 }
 
-// Global function for week selection
+// Global week selector (called from onclick)
 window.selectWeek = function(week) {
     if (!currentStudent) {
         showAlert("Please enter a valid enrolment number first");
         return;
     }
-    
-    if (currentStudent.status && currentStudent.status !== "") {
-        showAlert(`You have already registered for ${WEEK_DISPLAY_NAMES[currentStudent.status]}. Registration cannot be changed.`);
+    if (currentStudent.status) {
+        showAlert(`You have already registered for ${WEEK_DISPLAY_NAMES[currentStudent.status]}.`);
         return;
     }
-    
     if (!isSlotAvailable(week, currentStudent.year)) {
-        showAlert(`No available slots for ${WEEK_DISPLAY_NAMES[week]}. This week is full.`);
+        showAlert(`No available slots for ${WEEK_DISPLAY_NAMES[week]}.`);
         renderWeekCards(currentStudent.year);
         return;
     }
-    
     selectedWeek = week;
     renderWeekCards(currentStudent.year);
     showAlert(`Selected: ${WEEK_DISPLAY_NAMES[week]}`, false);
 };
 
 // ============================================
-// 📤 SUBMIT REGISTRATION TO GOOGLE SHEET
+// 📤 SUBMIT REGISTRATION
 // ============================================
-
 async function submitRegistration() {
     if (!currentStudent) {
         showAlert("❌ Please enter a valid enrolment number first.");
         return;
     }
-    
-    if (currentStudent.status && currentStudent.status !== "") {
-        showAlert(`⚠️ You have already registered for ${WEEK_DISPLAY_NAMES[currentStudent.status]}. Registration cannot be changed.`);
+    if (currentStudent.status) {
+        showAlert(`⚠️ Already registered for ${WEEK_DISPLAY_NAMES[currentStudent.status]}.`);
         return;
     }
-    
     if (!selectedWeek) {
         showAlert("⚠️ Please select a week before submitting.");
         return;
     }
-    
-    // Double-check slot availability
     if (!isSlotAvailable(selectedWeek, currentStudent.year)) {
-        showAlert(`❌ No available slots for ${WEEK_DISPLAY_NAMES[selectedWeek]}. Slots are full.`);
+        showAlert(`❌ No slots left for ${WEEK_DISPLAY_NAMES[selectedWeek]}.`);
         renderWeekCards(currentStudent.year);
         return;
     }
     
-    // Show loading state
-    const originalBtnHtml = submitBtn.innerHTML;
+    const originalHTML = submitBtn.innerHTML;
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<div class="loading-spinner"></div> Submitting...';
     
     try {
-        const response = await fetch(APPS_SCRIPT_URL, {
+        const resp = await fetch(APPS_SCRIPT_URL, {
             method: "POST",
             mode: "cors",
-            headers: {
-                "Content-Type": "application/x-www-form-urlencoded"
-            },
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: new URLSearchParams({
                 action: "updateStatus",
                 enrolNo: currentStudent.enrol,
@@ -487,79 +415,81 @@ async function submitRegistration() {
                 mode: currentStudent.mode
             })
         });
-        
-        const result = await response.json();
+        const result = await resp.json();
         
         if (result.success) {
-            // Update local state
+            // Update local state instantly
             currentStudent.status = selectedWeek;
+            registrations.push({
+                enrol: currentStudent.enrol,
+                name: currentStudent.name,
+                year: currentStudent.year,
+                mode: currentStudent.mode,
+                status: selectedWeek,
+                submission_date: new Date().toISOString()
+            });
+            computeSlotUsage(); // refresh cache
             
-            // Update registrationsData
-            const existingIndex = registrationsData.findIndex(r => r.enrol === currentStudent.enrol);
-            if (existingIndex !== -1) {
-                registrationsData[existingIndex].status = selectedWeek;
-            } else {
-                registrationsData.push({
-                    enrol: currentStudent.enrol,
-                    name: currentStudent.name,
-                    year: currentStudent.year,
-                    mode: currentStudent.mode,
-                    status: selectedWeek,
-                    submission_date: new Date().toISOString()
-                });
-            }
-            
-            showAlert(`✅ Success! You have registered for ${WEEK_DISPLAY_NAMES[selectedWeek]}.`, false);
-            
-            // Update UI
+            showAlert(`✅ Success! Registered for ${WEEK_DISPLAY_NAMES[selectedWeek]}.`, false);
             statusContainer.classList.remove("hidden");
             statusDisplay.innerHTML = `<span class="status-badge status-submitted"><i class="fas fa-check-circle mr-1"></i> Registered for ${WEEK_DISPLAY_NAMES[selectedWeek]}</span>`;
             renderWeekCards(currentStudent.year);
             submitBtn.disabled = true;
             submitBtn.style.opacity = "0.6";
             submitBtn.style.cursor = "not-allowed";
-            
         } else {
             showAlert(`❌ Registration failed: ${result.error || "Unknown error"}`);
-            await loadRegistrationsData();
+            await loadRegistrations();
+            computeSlotUsage();
             renderWeekCards(currentStudent.year);
-        }
-        
-    } catch (error) {
-        console.error("Submit error:", error);
-        showAlert("Network error: Could not register. Please try again later.");
-    } finally {
-        if (!currentStudent?.status) {
             submitBtn.disabled = false;
-            submitBtn.innerHTML = originalBtnHtml;
+            submitBtn.innerHTML = originalHTML;
+            submitBtn.style.opacity = "1";
         }
+    } catch (e) {
+        console.error(e);
+        showAlert("Network error. Please try again.");
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalHTML;
+        submitBtn.style.opacity = "1";
     }
 }
 
 // ============================================
-// 🔔 UI HELPERS
+// 🔔 ALERT POPUP
 // ============================================
-
-function showAlert(message, isError = true) {
-    alertPopup.textContent = message;
+function showAlert(msg, isError = true) {
+    alertPopup.textContent = msg;
     alertPopup.style.background = isError ? "#dc2626" : "#059669";
     alertPopup.classList.add('show');
-    setTimeout(() => {
-        alertPopup.classList.remove('show');
-    }, 3000);
+    setTimeout(() => alertPopup.classList.remove('show'), 3000);
 }
 
 // ============================================
-// 🔒 SECURITY (Optional)
+// 🎧 EVENT LISTENERS (smart debounce)
 // ============================================
-
-// Disable right-click
-document.addEventListener("contextmenu", function(e) {
-    e.preventDefault();
+let debounceTimer;
+enrolInput.addEventListener('input', (e) => {
+    const val = e.target.value.trim();
+    clearTimeout(debounceTimer);
+    // Use a tiny debounce (60ms) to avoid jank while still feeling instant
+    debounceTimer = setTimeout(() => {
+        // Use requestIdleCallback for non‑blocking UI updates
+        if (window.requestIdleCallback) {
+            requestIdleCallback(() => lookupStudent(val));
+        } else {
+            lookupStudent(val);
+        }
+    }, 60);
 });
 
-// Disable inspect shortcuts
-document.addEventListener("keydown", function(e) {
+submitBtn.addEventListener('click', submitRegistration);
+
+// ============================================
+// 🛡️ DISABLE DEVTOOLS (optional)
+// ============================================
+document.addEventListener("contextmenu", e => e.preventDefault());
+document.addEventListener("keydown", e => {
     if (e.key === "F12" || 
         (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J" || e.key === "C")) ||
         (e.ctrlKey && (e.key === "u" || e.key === "U"))) {
@@ -567,4 +497,4 @@ document.addEventListener("keydown", function(e) {
     }
 });
 
-console.log('%c⚡ PG Workshop Registration Portal - Fast Load Edition ⚡', 'color: #059669; font-size: 16px; font-weight: bold;');
+console.log('%c⚡ PG Quota Portal – Ultra Fast Edition ⚡', 'color: #059669; font-size: 16px; font-weight: bold;');
